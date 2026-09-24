@@ -1,0 +1,81 @@
+name: staging-wp
+
+# ---------------------------------------------------------------------------
+# Staging WordPress — stack WordPress con MariaDB dedicato
+#
+# Architettura:
+#   [ Nginx Proxy Manager (container esterno su debrand_network) ]
+#                    |
+#            debrand_network  (rete esterna condivisa con NPM)
+#                    |
+#            [ staging_wp:80 ]  <-- NPM instrada staging.debrandstudio.it qui
+#                    |
+#            staging_internal  (rete privata dello stack)
+#                    |
+#            [ staging_db:3306 ]
+# ---------------------------------------------------------------------------
+
+services:
+  wordpress:
+    image: wordpress:7.1.2
+    container_name: staging_wp
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - './volume:/var/www/html'
+      - './custom-php.ini:/usr/local/etc/php/conf.d/custom-php.ini'
+    environment:
+      WORDPRESS_DB_HOST: "staging_db:3306"
+      WORDPRESS_DB_NAME: "${MYSQL_DATABASE}"
+      WORDPRESS_DB_USER: "${MYSQL_USER}"
+      WORDPRESS_DB_PASSWORD: "${MYSQL_PASSWORD}"
+      WORDPRESS_TABLE_PREFIX: "${WORDPRESS_TABLE_PREFIX:-stg_}"
+
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_AUTO_UPDATE_CORE', 'minor');
+        define('FS_METHOD', 'direct');
+        define('WP_REDIS_HOST', 'redis-cache');
+        define('WP_REDIS_PORT', 6379);
+        define('WP_REDIS_TIMEOUT', 1);
+        define('WP_REDIS_READ_TIMEOUT', 1);
+        define('WP_REDIS_DATABASE', 2);
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 45s
+
+    networks:
+      - internal
+      - debrand_network
+
+  db:
+    image: mariadb:12.3.2
+    container_name: staging_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE}"
+      MYSQL_USER: "${MYSQL_USER}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD}"
+    volumes:
+      - './db-data:/var/lib/mysql'
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  internal:
+    name: staging_internal
+    driver: bridge
+  debrand_network:
+    external: true
